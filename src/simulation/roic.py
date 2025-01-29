@@ -20,18 +20,20 @@ def calculate_effective_tax_rate(
     # True operating income (without waste)
     true_operating_income = revenue - cogs - non_marketing_opex - effective_marketing
     
-    if true_operating_income <= 0:
-        return 0.0
-    
     # NOPAT with waste (this is what we actually get)
     actual_operating_income = true_operating_income - wasted_marketing
     actual_nopat = actual_operating_income * (1 - tax_rate)
+    
+    # For negative operating income, tax benefit should reduce the loss
+    if true_operating_income <= 0:
+        return tax_rate  # Return base tax rate for tax benefit calculation
     
     # Solve for effective tax rate that gives same NOPAT when applied to true operating income
     # actual_nopat = true_operating_income * (1 - effective_tax_rate)
     effective_tax_rate = 1 - (actual_nopat / true_operating_income)
     
-    return effective_tax_rate
+    # Ensure effective tax rate is between 0 and 1
+    return max(0.0, min(1.0, effective_tax_rate))
 
 def calculate_roic_improvement(
     revenue: float,
@@ -70,11 +72,11 @@ def calculate_roic_improvement(
         # Calculate operating income with reduced marketing spend
         operating_income = revenue - cogs - non_marketing_opex - current_marketing_spend
         
-        if operating_income <= 0 or invested_capital <= 0:
+        if invested_capital <= 0:
             roic_values.append(0.0)
             continue
         
-        # Calculate NOPAT using base tax rate
+        # Calculate NOPAT using base tax rate (allow negative values)
         nopat = operating_income * (1 - tax_rate)
         roic = nopat / invested_capital
         roic_values.append(roic)
@@ -175,6 +177,7 @@ def simulate_multi_year_cumulative_roic(
                     # Adjust growth rate based on prior year's ROIC performance
                     roic_adjustment = (prior_year_roic - 0.05) * roic_impact  # Compare to 5% baseline ROIC
                     adjusted_growth = marketing_growth + max(-0.1, min(0.2, roic_adjustment))
+                    adjusted_growth = max(0, adjusted_growth)  # Ensure growth rate doesn't go negative
                     
                     # For subsequent years, apply waste removal to the growth portion
                     base_growth = current_marketing * adjusted_growth
@@ -191,27 +194,30 @@ def simulate_multi_year_cumulative_roic(
                     - current_marketing  # Using reduced marketing spend
                 )
                 
-                nopat = max(0, operating_income * (1 - tax_rate))
+                # Handle negative operating income
+                if operating_income <= 0:
+                    nopat = 0
+                    current_roic = 0
+                else:
+                    nopat = operating_income * (1 - tax_rate)
+                    current_roic = nopat / current_capital if current_capital > 0 else 0
                 
                 # Store results for this year
                 yearly_nopat.append(nopat)
                 yearly_capital.append(current_capital)
                 
-                # Calculate single-year ROIC for growth calculations
-                current_roic = nopat / current_capital if current_capital > 0 else 0
-                
                 if year < n_years - 1:  # Don't update for the last year
-                    # Grow revenue based on current marketing spend
+                    # Grow revenue based on current marketing spend and ROIC performance
                     # More marketing spend = more revenue growth, but with diminishing returns
                     base_revenue_growth = marketing_growth * (current_marketing / total_marketing_spend) ** 0.7
                     
                     # Add ROIC performance boost to revenue growth
                     roic_boost = max(0, (current_roic - 0.05) * 0.7)  # Additional growth for above-baseline ROIC
-                    total_revenue_growth = base_revenue_growth + roic_boost
+                    total_revenue_growth = max(0, base_revenue_growth + roic_boost)  # Ensure total growth doesn't go negative
                     
-                    # Add random variation
-                    revenue_growth = np.random.normal(total_revenue_growth, revenue_std)
-                    current_revenue *= (1 + max(0, revenue_growth))
+                    # Add random variation while ensuring growth stays non-negative
+                    revenue_growth = max(0, np.random.normal(total_revenue_growth, revenue_std))
+                    current_revenue *= (1 + revenue_growth)
                     
                     # Grow invested capital at user-specified rate
                     current_capital *= (1 + capital_growth)
@@ -222,7 +228,13 @@ def simulate_multi_year_cumulative_roic(
             # Calculate cumulative ROIC for each year
             cumulative_nopats = np.cumsum(yearly_nopat)
             cumulative_capitals = np.cumsum(yearly_capital)
-            yearly_cumulative_roics = cumulative_nopats / cumulative_capitals
+            
+            # Handle zero or negative cumulative capital
+            yearly_cumulative_roics = np.zeros(len(years))
+            for i in range(len(years)):
+                if cumulative_capitals[i] > 0:
+                    yearly_cumulative_roics[i] = cumulative_nopats[i] / cumulative_capitals[i]
+            
             all_cumulative_roics.append(yearly_cumulative_roics)
         
         # Calculate statistics across simulations for each year

@@ -25,13 +25,18 @@ def create_roic_improvement_plot(scenarios, dark_mode=True):
     
     fig = go.Figure()
     
-    # Calculate max ROIC value for y-axis range
-    max_roic = 0
+    # Calculate min and max ROIC values for y-axis range
+    min_roic = float('inf')
+    max_roic = float('-inf')
     for _, (_, roic_vals) in scenarios.items():
-        max_roic = max(max_roic, max(r * 100 for r in roic_vals))
+        roic_percentages = [r * 100 for r in roic_vals]
+        min_roic = min(min_roic, min(roic_percentages))
+        max_roic = max(max_roic, max(roic_percentages))
     
-    # Ensure max_roic is at least 40% to accommodate AAPL's ROIC
-    max_roic = max(max_roic, 40)
+    # Add padding to min and max
+    padding = (max_roic - min_roic) * 0.1  # 10% of the range
+    min_roic = min_roic - padding
+    max_roic = max(max_roic + padding, 40)  # Ensure max is at least 40% for reference lines
     
     # Add company reference lines
     companies = {
@@ -110,7 +115,8 @@ def create_roic_improvement_plot(scenarios, dark_mode=True):
             zeroline=True,
             zerolinecolor=grid_color,
             color=text_color,
-            range=[0, max_roic * 1.1]  # Start at 0, add 10% padding at top
+            range=[min_roic, max_roic],  # Set range to include negative values with padding
+            autorange=False  # Disable autorange to enforce our custom range
         ),
         plot_bgcolor=bg_color,
         paper_bgcolor=bg_color,
